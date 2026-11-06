@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PHANTOM</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05060d; overflow: hidden;
+        font: 13px/1.5 "Trebuchet MS", Segoe UI, sans-serif; color: #aab0d0; }
+      #app canvas { display: block; }
+
+      /* ── INDICES DE TOUCHES (tutoriel invisible) ──────────────────────────────
+         Plus de bloc d'aide permanent. À la place, deux petits indices DISCRETS
+         apparaissent près de Phantom quand le joueur hésite, et DISPARAISSENT
+         définitivement dès qu'il a fait le geste (1er pas → ZQSD ; 1re illumination
+         → Espace). main3d.ts les positionne (près de Phantom) et gère leur fondu. */
+      .indice {
+        position: fixed; z-index: 12; pointer-events: none;
+        transform: translate(-50%, -50%);
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        opacity: 0; transition: opacity 1.1s ease;
+      }
+      /* Discret : peu opaque + léger FLOTTEMENT (« dessin qui flotte »). */
+      .indice.visible { opacity: 0.7; animation: flotteIndice 3.4s ease-in-out infinite; }
+      /* Disposition clavier réelle : Z au-dessus, Q S D en dessous (croix ZQSD). */
+      .indice .rangee { display: flex; gap: 6px; justify-content: center; }
+      /* TOUCHE = DESSIN AU TRAIT BLANC (contour fin, fond transparent, lettre légère) →
+         une suggestion flottante, pas un bouton plein. Le moins intrusif possible. */
+      .indice .touche {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 30px; height: 30px; border-radius: 9px;
+        border: 1.5px solid rgba(255,255,255,0.82);
+        background: rgba(160,220,255,0.05);             /* soupçon de « vitre » lumineuse */
+        color: #f4fbff;
+        font: 400 13px/1 "Trebuchet MS", Segoe UI, sans-serif; letter-spacing: 1px;
+        /* lueur cyan douce → la touche fait partie de la LUMIÈRE de Phantom, pas un trait plat */
+        box-shadow: 0 0 11px rgba(127,220,255,0.35), inset 0 0 7px rgba(127,220,255,0.10);
+        text-shadow: 0 0 7px rgba(127,220,255,0.55), 0 1px 3px rgba(0,0,0,0.7);
+      }
+      /* BARRE D'ESPACE : long trait fin lumineux, même esprit dessiné. */
+      .indice .barre-espace {
+        width: 150px; height: 22px; border-radius: 11px;
+        font-size: 10px; letter-spacing: 4px; text-transform: uppercase;
+      }
+      @keyframes flotteIndice {
+        0%,100% { transform: translate(-50%, -50%); }
+        50%     { transform: translate(-50%, calc(-50% - 6px)); }
+      }
+
+      /* ── BARRE D'ÉVEIL (haut-centre) : avancée de la Région 1 (choix de design).
+         Sobre/discrète (la DA vise le diégétique) ; n'apparaît qu'en jeu.
+         REVUE 19/08 (playtest, « moche ») : bar trop fine/plate + la lueur du
+         remplissage (box-shadow) débordait en un petit point lumineux visible même à 0%
+         (un rond flottant avant tout progrès). Corrigé : bar plus épaisse, piste avec un
+         léger creux (profondeur), lueur qui n'apparaît qu'au-delà d'un vrai remplissage
+         (classe `.a-de-la-vie`, posée par le JS dès que la progression dépasse 0). */
+      #barre-eveil {
+        position: fixed; top: 22px; left: 50%; transform: translateX(-50%);
+        width: 240px; height: 10px; border-radius: 6px; z-index: 11; pointer-events: none;
+        background: rgba(10,14,28,0.55); border: 1px solid rgba(180,220,255,0.22);
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.5), 0 1px 10px rgba(0,0,0,0.45);
+        overflow: hidden; opacity: 0; transition: opacity 0.8s ease;
+      }
+      #barre-eveil.visible { opacity: 0.92; }
+      #barre-eveil .remplissage {
+        height: 100%; width: 0%; border-radius: 5px;
+        /* COULEUR PAR ZONE (choix de design 19/08) : vert pour R1 (défaut), orange pour R2
+           (classe `.zone-r2`, posée par le JS selon `r3d.zoneProche()`) — distingue les deux
+           zones d'un coup d'œil sur la même barre. */
+        background: linear-gradient(90deg, #6fe08a, #9df5b0);
+        transition: width 0.4s ease, box-shadow 0.3s ease, background 0.5s ease;
+      }
+      #barre-eveil .remplissage.zone-r2 {
+        background: linear-gradient(90deg, #f5a45f, #ffcf8a);
+      }
+      #barre-eveil .remplissage.a-de-la-vie {
+        box-shadow: 0 0 12px rgba(127,220,127,0.85);
+      }
+      #barre-eveil .remplissage.zone-r2.a-de-la-vie {
+        box-shadow: 0 0 12px rgba(255,170,80,0.85);
+      }
+
+      /* ── ÉCRANS (overlays) : titre / victoire de région / victoire finale ──────
+         Ce sont de simples voiles plein écran posés PAR-DESSUS le rendu 3D.
+         main3d.ts les affiche (classe .visible) ou les masque selon l'étape du
+         jeu (le module core/flux.ts). On garde un style sobre et contemplatif. */
+      .ecran {
+        position: fixed; inset: 0; z-index: 20;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        text-align: center; padding: 24px;
+        /* Voile sombre dégradé : on voit un peu le monde derrière, en très assombri. */
+        background: radial-gradient(ellipse at center, rgba(8,10,22,0.78), rgba(3,4,9,0.96));
+        color: #cdd4f0;
+        /* Masqué par défaut : invisible ET ne capte pas la souris. Une transition
+           douce d'opacité donne le côté « contemplatif » (fondu, pas de coupe sèche). */
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.9s ease;
+      }
+      .ecran.visible { opacity: 1; pointer-events: auto; }
+
+      .ecran h2 { margin: 0 0 8px; font-size: 34px; font-weight: 300; letter-spacing: 3px;
+        color: #eaf0ff; text-shadow: 0 2px 18px rgba(127,220,255,0.35); }
+      .ecran .sous { margin: 0 0 26px; font-size: 15px; color: #8a91b8; max-width: 460px; }
+      .ecran .appel { margin: 0; font-size: 14px; color: #cdd6ee; letter-spacing: 1px;
+        /* petit clignotement très lent : « appuie pour continuer » qui respire */
+        animation: respire 2.6s ease-in-out infinite; }
+      /* La touche « Entrée » suggérée : même dessin au trait blanc que les indices en jeu. */
+      .ecran .touche-titre {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 3px 11px; margin-left: 4px;
+        border: 1.5px solid rgba(255,255,255,0.7); border-radius: 7px;
+        color: #eaf2ff; font-weight: 400; letter-spacing: 1px;
+        text-shadow: 0 1px 5px rgba(0,0,0,0.6);
+      }
+      @keyframes respire { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <!-- INDICES DE TOUCHES : positionnés près de Phantom par main3d.ts, en fondu.
+         Ils n'apparaissent qu'en cas d'hésitation et disparaissent à jamais une
+         fois le geste appris. AUCUN texte d'aide permanent. -->
+    <div id="indice-deplacement" class="indice">
+      <div class="rangee"><span class="touche">Z</span></div>
+      <div class="rangee">
+        <span class="touche">Q</span><span class="touche">S</span><span class="touche">D</span>
+      </div>
+    </div>
+    <div id="indice-illumination" class="indice">
+      <span class="touche barre-espace">espace</span>
+    </div>
+
+    <!-- BARRE D'ÉVEIL de la Région 1 (haut-centre) : avancée visible. -->
+    <div id="barre-eveil"><div class="remplissage"></div></div>
+
+    <!-- ÉCRAN-TITRE : le tout premier écran, avant d'entrer dans le jeu. -->
+    <div id="ecran-titre" class="ecran">
+      <h2>PHANTOM</h2>
+      <p class="appel">Appuie sur <span class="touche-titre">Entrée&#8201;&#8629;</span></p>
+    </div>
+
+    <!-- ÉCRAN VICTOIRE DE RÉGION : entre deux régions (R1 éveillée → on continue). -->
+    <div id="ecran-victoire" class="ecran">
+      <h2>Une région s'éveille</h2>
+      <p class="sous" id="victoire-texte">La lumière revient. Mais d'autres lieux t'attendent, encore endormis.</p>
+      <p class="appel">Appuie pour continuer</p>
+    </div>
+
+    <!-- ÉCRAN VICTOIRE FINALE : tout est éveillé → la fin heureuse + rejouer. -->
+    <div id="ecran-fin" class="ecran">
+      <h2>Le monde respire à nouveau</h2>
+      <p class="sous">…piu&#8201;?</p>
+      <p class="appel">Appuie pour recommencer</p>
+    </div>
+
+    <script type="module" src="/src/main3d.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+# Dépendances installées (se régénèrent avec `npm install`)
+node_modules/
+
+# Résultat du build
+dist/
+
+# Divers
+.DS_Store
+*.log
